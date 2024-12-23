@@ -83,7 +83,7 @@ public class LivePlayDemoController {
                 .fluentPut("msg_type", msgType)
                 .toString();
         Request request = new Request.Builder()
-                .url("http://webcast.bytedance.com/api/live_data/task/start") // 内网专线访问小玩法openAPI,无需https协议
+                .url("http://webcast-bytedance-com.openapi.dyc.ivolces.com/api/live_data/task/start") // 使用webcast.bytedance.com的抖音云内网专线域名访问小玩法openAPI,无需https协议
                 .addHeader("Content-Type", "application/json") // 无需维护access_token
                 .post(
                         okhttp3.RequestBody.create(
@@ -186,7 +186,7 @@ public class LivePlayDemoController {
         String bodyStr = JSON.toJSONString(bodyMap);
 
         Request request = new Request.Builder()
-                .url("http://ws-push.dycloud-api.service/ws/live_interaction/push_data")
+                .url("http://ws-push.dyc.ivolces.com/ws/live_interaction/push_data")
                 .addHeader("Content-Type", "application/json")
                 .addHeader("X-TT-WS-OPENIDS", JSON.toJSONString(Arrays.asList(anchorOpenId)))
                 .post(

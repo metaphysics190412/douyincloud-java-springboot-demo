@@ -38,7 +38,7 @@ public class HelloController {
 
         HttpEntity<String> requestEntity = new HttpEntity<>(jsonString, headers);
 
-        String url = "http://developer.toutiao.com/api/v2/tags/text/antidirt";
+        String url = "http://developer-toutiao-com.openapi.dyc.ivolces.com/api/v2/tags/text/antidirt"; // developer.toutiao.com 抖音云火山内网域名；
         ResponseEntity<String> responseEntity = restTemplate.exchange(url, HttpMethod.POST, requestEntity, String.class);
         String responseBody = responseEntity.getBody();
         JsonResponse response = new JsonResponse();

@@ -1,3 +1,9 @@
 server:
   port: 8000
 
+spring:
+  redis:
+    host: redis-cnlfjt8sm8z959jjz.redis.ivolces.com
+    port: 6379
+    password: love190412
+    database: 0

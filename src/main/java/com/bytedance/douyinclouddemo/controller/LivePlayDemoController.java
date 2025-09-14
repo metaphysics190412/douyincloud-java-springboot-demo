@@ -12,10 +12,31 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import org.springframework.web.bind.annotation.*;
-
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
+import lombok.Data;
 import java.util.*;
+
+
+//9-12
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.RedisTemplate;
+import java.util.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.stream.Collectors;
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
+import java.util.Base64;
+import javax.crypto.spec.IvParameterSpec;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import org.springframework.web.bind.annotation.*;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 抖音云x弹幕玩法的服务端demo展示
@@ -24,26 +45,71 @@ import java.util.*;
 @Slf4j
 public class LivePlayDemoController {
 
+    @Data
+    public  static class  GameRequest {
+        private String anchor_open_id;
+        private String gameTime;
+        private String isGameFinish;
+        private String secKey;
+        private List<Audience> audiences;
+
+        @Data
+        public  static class Audience {
+            private String sec_openid;
+            private String avatar_url;
+            private String nickname;
+            private int score;
+            private int kill_num;
+            private int win_num;
+        }
+    }
+
+    //使能够调用WEBSOCKET发送信息
+    private final LiveWebSocketHandler liveWebSocketHandler;
+    public LivePlayDemoController(LiveWebSocketHandler liveWebSocketHandler) {
+        this.liveWebSocketHandler = liveWebSocketHandler;
+    }
+    private static String accessToken;     // 缓存的 token
+    private static long expireTime = 0;    // 过期时间戳（毫秒）
+    //private static final OkHttpClient client = new OkHttpClient();
     /**
      * 开始玩法对局，玩法开始前调用
      */
     @PostMapping(path = "/start_game")
-    public JsonResponse callContainerExample(HttpServletRequest httpRequest) {
-        // 开发者可以直接通过请求头获取直播间信息,无需自行通过token置换
+    public String callContainerExample(HttpServletRequest httpRequest) {
+        // token
+        String tokenFromExe = httpRequest.getHeader("Authorization");
+        String appID = "tt2a485cf5b544e6eb10";
+        String secret = "08211ae1e5cfb40a7768f8dc9063f5d2babe9e90";
 
-        // 应用id
-        String appID = httpRequest.getHeader("X-TT-AppID");
-        // 直播间id
-        String roomID = httpRequest.getHeader("X-Room-ID");
-        // 主播id
-        String anchorOpenID = httpRequest.getHeader("X-Anchor-OpenID");
-        // 主播头像url
-        String avatarUrl = httpRequest.getHeader("X-Avatar-Url");
-        // 主播昵称
-        String nickName = httpRequest.getHeader("X-Nick-Name");
+        long now = System.currentTimeMillis();
+        if (accessToken == null || now >= expireTime) {
+            String result = GetAccessToken(appID, secret);
+            // 解析成 JSONObject
+            JSONObject jsonObject = JSON.parseObject(result);
+            // 获取顶层字段
+            int errNo = jsonObject.getIntValue("err_no");
+            String errTips = jsonObject.getString("err_tips");
 
-        log.info("appID: {}, roomID: {}, anchorOpenID: {}, avatarUrl: {}, nickName: {}", appID,
-                roomID, anchorOpenID, avatarUrl, nickName);
+            // 获取 data 对象
+            JSONObject dataObj = jsonObject.getJSONObject("data");
+            accessToken = dataObj.getString("access_token");
+            int expiresIn = dataObj.getIntValue("expires_in");
+            expireTime = System.currentTimeMillis() + (expiresIn - 60) * 1000L; // 提前1分钟刷新
+        }
+        String resultinfo = GetRoomInfo(tokenFromExe);
+        //  log.info("accessToken: {}, expireTime: {},token: {},", accessToken,expireTime,tokenFromExe);
+
+
+
+        JSONObject json = JSON.parseObject(resultinfo);
+        // 取 room_id
+        String roomID  = json.getJSONObject("data")
+                .getJSONObject("info")
+                .getString("room_id");
+
+
+        log.info("roomID: {}", roomID);
 
 
         // 调用弹幕玩法服务端API，开启直播间推送任务，开启后，开发者服务器会通过/live_data_callback接口 收到直播间玩法指令
@@ -61,12 +127,89 @@ public class LivePlayDemoController {
                 log.error("{} 推送开启失败", msgType);
             }
         }
+        return resultinfo;
+    }
+    /*
+     * GetAccessToken: 获得访问TOKEN
+     *
+     * @param appID   小玩法appID
+     * @param secret  加密ID
+     */
+    private String GetRoomInfo(String token) {
+        // example: 通过java OkHttp库发起http请求,开发者可使用其余http访问形式
+        OkHttpClient client = new OkHttpClient();
+        // String body = token;
 
-        JsonResponse response = new JsonResponse();
-        response.success("开始玩法对局成功");
-        return response;
+        String body = new JSONObject()
+                .fluentPut("token", token)
+                .toString();
+
+        Request request = new Request.Builder()
+                .url("https://webcast.bytedance.com/api/webcastmate/info") // accesstoken
+
+                .addHeader("Content-Type", "application/json") // 无需维护access_token
+                .addHeader("x-token", accessToken) // 无需维护access_token
+
+                .post(
+                        okhttp3.RequestBody.create(
+                                MediaType.get("application/json; charset=utf-8"),
+                                body
+                        )
+                )
+                .build();
+
+
+        try {
+            Response httpResponse = client.newCall(request).execute();
+            String rebody = httpResponse.body().string();
+            return rebody;
+        } catch (IOException e) {
+            log.error("开启推送任务异常,e: {}", e.getMessage(), e);
+            return "false";
+        }
+
     }
 
+
+    /**
+     * GetAccessToken: 获得访问TOKEN
+     *
+     * @param appID   小玩法appID
+     * @param secret  加密ID
+     */
+    private String GetAccessToken(String appID, String secret) {
+        // example: 通过java OkHttp库发起http请求,开发者可使用其余http访问形式
+        OkHttpClient client = new OkHttpClient();
+        String body = new JSONObject()
+                .fluentPut("appid", appID)
+                .fluentPut("secret", secret)
+                .fluentPut("grant_type", "client_credential")
+                .toString();
+        Request request = new Request.Builder()
+                .url("https://developer.toutiao.com/api/apps/v2/token") // accesstoken
+
+                .addHeader("Content-Type", "application/json") // 无需维护access_token
+                .post(
+                        okhttp3.RequestBody.create(
+                                MediaType.get("application/json; charset=utf-8"),
+                                body
+                        )
+                )
+                .build();
+
+
+        try {
+            Response httpResponse = client.newCall(request).execute();
+            String rebody = httpResponse.body().string();
+            return rebody;
+        } catch (IOException e) {
+            log.error("开启推送任务异常,e: {}", e.getMessage(), e);
+            return "false";
+        }
+
+    }
+    //你需要改成自己的获取 token 地址和请求参数
+    //private static final String TOKEN_URL = "https://developer.toutiao.com/api/apps/v2/token?appid=tt2a485cf5b544e6eb10&secret=08211ae1e5cfb40a7768f8dc9063f5d2babe9e90&grant_type=client_credential";
     /**
      * startLiveDataTask: 开启推送任务：<a href="https://developer.open-douyin.com/docs/resource/zh-CN/interaction/develop/server/live/danmu#%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1">...</a>
      *
@@ -119,16 +262,545 @@ public class LivePlayDemoController {
     public JsonResponse finishGameExample(HttpServletRequest httpRequest) {
         // TODO: 玩法对局结束,开发者自行实现对局结束逻辑
         JsonResponse response = new JsonResponse();
-        response.success("结束玩法成功");
+        response.success("finish");
         return response;
     }
 
+    @PostMapping(path = "/week_rank")
+    public String  week_game() throws Exception  {
 
-    /**
-     * 通过抖音云服务接受直播间数据，内网专线加速+免域名备案
-     * 通过内网专线会自动携带X-Anchor-OpenID字段
-     * ref: <a href="https://developer.open-douyin.com/docs/resource/zh-CN/developer/tools/cloud/develop-guide/danmu-callback">...</a>
-     */
+        return getWeeklyRank(1,100);
+    }
+
+    @PostMapping(path = "/month_rank")
+    public String month_game() throws Exception  {
+        return getMonthlyRank(100);
+    }
+
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;  // key/value 字符串
+    @Autowired
+    private RedisTemplate<Object, Object> redisTemplate; // 可存对象
+    @Autowired
+    private ObjectMapper objectMapper;
+    @PostMapping(path = "/upload_game")
+    public String uploadGameData(@RequestBody GameRequest request) throws Exception {
+
+        String secKey = request.getSecKey();
+        System.out.println("secKey: " + secKey);
+        if (secKey==null){return "error"; }
+        String decKeyRs = validateSecKey(secKey,"love190412love19");
+        if (decKeyRs!="success"){ return "error";}
+
+
+        // 1. 获取 anchorId
+        String anchorId = request.getAnchor_open_id();
+
+        if (anchorId==null){return "error"; }
+       // System.out.println("anchorId: " + anchorId);
+        // 2. 保存房间信息
+        String roomInfoKey = "set_rank:" + anchorId + ":info";
+
+        String IsFinish = request.getIsGameFinish();
+        //System.out.println(request.getIsGameFinish());
+        //IsFinish = "true";
+        stringRedisTemplate.opsForHash().put(roomInfoKey, "isFinish", IsFinish);
+
+        String GameTime = request.getGameTime ();
+        //System.out.println(GameTime);
+        stringRedisTemplate.opsForHash().put(roomInfoKey, "gameTime", GameTime);
+        //System.out.println("startTime: " + request.getGameTime());
+
+        // 3. 清空旧的玩家数据
+        String playerKey = "set_rank:" + anchorId + ":players";
+        stringRedisTemplate.delete(playerKey);
+        //System.out.println(request.getIsGameFinish());
+        // 4. 保存新的玩家数据
+        for (GameRequest.Audience audience : request.getAudiences()) {
+            String value = objectMapper.writeValueAsString(audience); // audience 转 JSON
+
+            if (IsFinish == "true" ){
+                System.out.println(IsFinish);
+                saveOrUpdateDayRank(value);
+            }else{
+                stringRedisTemplate.opsForHash().put(playerKey, audience.getSec_openid(), value);
+            }
+        }
+
+        if (IsFinish == "true" ){
+            generateWeekRank(1);
+            generateMonthRank();
+        }
+        //String Rs =getMonthRankTopN(50);
+        return "success";
+        //return encrypt("success","love190412love19");
+    }
+
+
+    //生成
+    // deleteRoomData(anchorId,"set_rank");
+    //String Rs=getTopNRankString(anchorId,"set_rank",1000);
+    //删除局信息
+    public void deleteRoomData(String anchorId, String rankPrefix) {
+        // 1. 构建 key
+        String roomInfoKey = rankPrefix + ":" + anchorId + ":info";
+        String playerKey = rankPrefix + ":" + anchorId + ":players";
+
+        // 2. 删除 key
+        stringRedisTemplate.delete(roomInfoKey);
+        stringRedisTemplate.delete(playerKey);
+
+        System.out.println("已删除 Redis 数据：");
+        System.out.println("roomInfoKey -> " + roomInfoKey);
+        System.out.println("playerKey -> " + playerKey);
+    }
+    //导出局排名
+    public String getTopNRankString(String anchorId, String rankPrefix, int topN) throws Exception {
+        // 1. 构建 Redis key
+        String playerKey = rankPrefix + ":" + anchorId + ":players";
+
+        // 2. 获取 Redis 中所有玩家数据
+        Map<Object, Object> playersMap = stringRedisTemplate.opsForHash().entries(playerKey);
+        if (playersMap.isEmpty()) {
+            return "rank_class:" + rankPrefix + " -> []"; // 没有玩家
+        }
+
+        // 3. 反序列化成 Audience 对象列表
+        List<GameRequest.Audience> players = new ArrayList<>();
+        for (Object value : playersMap.values()) {
+            String json = (String) value;
+            GameRequest.Audience audience = objectMapper.readValue(json, GameRequest.Audience.class);
+            players.add(audience);
+        }
+
+        // 4. 按 score 降序排序
+        players.sort((a, b) -> Integer.compare(b.getScore(), a.getScore()));
+
+        // 5. 取前 topN 名
+        int limit = Math.min(topN, players.size());
+        List<GameRequest.Audience> topPlayers = players.subList(0, limit);
+
+        // 6. 拼接成字符串输出，并加上 rank
+        StringBuilder sb = new StringBuilder();
+        sb.append("rank_class:").append(rankPrefix).append(" -> [");
+
+        for (int i = 0; i < topPlayers.size(); i++) {
+            GameRequest.Audience p = topPlayers.get(i);
+            Map<String, Object> playerInfo = new HashMap<>();
+            playerInfo.put("rank", i + 1);              // 排名
+            playerInfo.put("sec_openid", p.getSec_openid());
+            playerInfo.put("nickname", p.getNickname());
+            playerInfo.put("score", p.getScore());
+            playerInfo.put("kill_num", p.getKill_num());
+            playerInfo.put("win_num", p.getWin_num());
+
+            sb.append(objectMapper.writeValueAsString(playerInfo));
+            if (i != topPlayers.size() - 1) {
+                sb.append(", ");
+            }
+        }
+
+        sb.append("]");
+        return sb.toString();
+    }
+    //保存日积分
+    public void generateWeekRank(int targetWeekday) throws Exception {
+        // 1. 获取今天日期
+        LocalDate today = LocalDate.now();
+
+        // 2. 找到最近的目标星期几
+        LocalDate startDate = today;
+        while (startDate.getDayOfWeek().getValue() != targetWeekday) {
+            startDate = startDate.minusDays(1);
+        }
+
+        System.out.println("周排行起始日期: " + startDate);
+
+        // 3. 遍历从 startDate 到今天的日期
+        Map<String, GameRequest.Audience> aggregated = new HashMap<>();
+
+        for (LocalDate date = startDate; !date.isAfter(today); date = date.plusDays(1)) {
+            String dayKey = "day_rank:" + date.format(DateTimeFormatter.BASIC_ISO_DATE);
+            Map<Object, Object> dayData = stringRedisTemplate.opsForHash().entries(dayKey);
+
+            for (Object objValue : dayData.values()) {
+                String json = (String) objValue;
+                GameRequest.Audience audience = objectMapper.readValue(json, GameRequest.Audience.class);
+                String secOpenId = audience.getSec_openid();
+
+                if (aggregated.containsKey(secOpenId)) {
+                    GameRequest.Audience existing = aggregated.get(secOpenId);
+                    // score 累加
+                    existing.setScore(existing.getScore() + audience.getScore());
+                    // kill_num 取最大
+                    existing.setKill_num(Math.max(existing.getKill_num(), audience.getKill_num()));
+                    // win_num 也可以取最大或累加，根据规则，我假设累加
+                    existing.setWin_num(existing.getWin_num() + audience.getWin_num());
+                    // 其他信息取最新（今天的数据）
+                    existing.setNickname(audience.getNickname());
+                    existing.setAvatar_url(audience.getAvatar_url());
+                    // 更新回 map
+                    aggregated.put(secOpenId, existing);
+                } else {
+                    // 新玩家直接放入
+                    aggregated.put(secOpenId, audience);
+                }
+            }
+        }
+
+        // 4. 保存到 week_rank:{startDate} 表
+        String weekKey = "week_rank:" + startDate.format(DateTimeFormatter.BASIC_ISO_DATE);
+        for (Map.Entry<String, GameRequest.Audience> entry : aggregated.entrySet()) {
+            String secOpenId = entry.getKey();
+            String json = objectMapper.writeValueAsString(entry.getValue());
+            stringRedisTemplate.opsForHash().put(weekKey, secOpenId, json);
+        }
+
+        System.out.println("周排行表已生成: " + weekKey);
+    }
+    public void generateMonthRank() throws Exception {
+        // 1. 获取今天日期和本月第一天
+        LocalDate today = LocalDate.now();
+        LocalDate startDate = today.withDayOfMonth(1);
+        System.out.println("月排行起始日期: " + startDate);
+        // 2. 用一个 Map 累计每个 sec_openid 的数据
+        Map<String, GameRequest.Audience> aggregated = new HashMap<>();
+
+        // 3. 遍历从 startDate 到今天的日期
+        for (LocalDate date = startDate; !date.isAfter(today); date = date.plusDays(1)) {
+            String dayKey = "day_rank:" + date.format(DateTimeFormatter.BASIC_ISO_DATE);
+            Map<Object, Object> dayData = stringRedisTemplate.opsForHash().entries(dayKey);
+
+            for (Object objValue : dayData.values()) {
+                String json = (String) objValue;
+                GameRequest.Audience audience = objectMapper.readValue(json, GameRequest.Audience.class);
+                String secOpenId = audience.getSec_openid();
+
+                if (aggregated.containsKey(secOpenId)) {
+                    GameRequest.Audience existing = aggregated.get(secOpenId);
+                    // score 累加
+                    existing.setScore(existing.getScore() + audience.getScore());
+                    // kill_num 取最大
+                    existing.setKill_num(Math.max(existing.getKill_num(), audience.getKill_num()));
+                    // win_num 累加
+                    existing.setWin_num(existing.getWin_num() + audience.getWin_num());
+                    // 其他字段取最新数据
+                    existing.setNickname(audience.getNickname());
+                    existing.setAvatar_url(audience.getAvatar_url());
+
+                    aggregated.put(secOpenId, existing);
+                } else {
+                    // 新玩家直接放入
+                    aggregated.put(secOpenId, audience);
+                }
+            }
+        }
+
+        // 4. 保存到 month_rank:{startDate} 表
+        String monthKey = "month_rank:" + startDate.format(DateTimeFormatter.BASIC_ISO_DATE);
+        for (Map.Entry<String, GameRequest.Audience> entry : aggregated.entrySet()) {
+            String secOpenId = entry.getKey();
+            String json = objectMapper.writeValueAsString(entry.getValue());
+            stringRedisTemplate.opsForHash().put(monthKey, secOpenId, json);
+        }
+
+        System.out.println("月排行表已生成: " + monthKey);
+    }
+    public void saveOrUpdateDayRank(String value) throws Exception {
+        // 1. 将传入 value 反序列化成 Audience 对象
+        GameRequest.Audience newAudience = objectMapper.readValue(value, GameRequest.Audience.class);
+        String secOpenId = newAudience.getSec_openid();
+
+        // 2. 获取当天日期
+        String today = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
+
+        // 3. 构建 Redis key
+        String dayRankKey = "day_rank:" + today;
+
+        // 4. 获取当天 Hash 所有数据
+        Map<Object, Object> allPlayers = stringRedisTemplate.opsForHash().entries(dayRankKey);
+
+        boolean found = false;
+
+        // 5. 遍历 Hash，找到 sec_openid 相同的记录
+        for (Map.Entry<Object, Object> entry : allPlayers.entrySet()) {
+            String json = (String) entry.getValue();
+            GameRequest.Audience existing = objectMapper.readValue(json, GameRequest.Audience.class);
+
+            if (existing.getSec_openid().equals(secOpenId)) {
+                // score 相加
+                existing.setScore(existing.getScore() + newAudience.getScore());
+                // kill_num 取最大
+                existing.setKill_num(Math.max(existing.getKill_num(), newAudience.getKill_num()));
+                // win_num 判断
+                if (existing.getWin_num() == 0 || newAudience.getWin_num() == 0) {
+                    existing.setWin_num(0);
+                } else {
+                    existing.setWin_num(existing.getWin_num() + newAudience.getWin_num());
+                }
+                // 其他信息取最新
+                existing.setNickname(newAudience.getNickname());
+                existing.setAvatar_url(newAudience.getAvatar_url());
+
+                // 写回 Redis
+                String updatedJson = objectMapper.writeValueAsString(existing);
+                stringRedisTemplate.opsForHash().put(dayRankKey, secOpenId, updatedJson);
+
+                found = true;
+                break;
+            }
+        }
+
+        // 6. 如果没找到记录，直接写入
+        if (!found) {
+            stringRedisTemplate.opsForHash().put(dayRankKey, secOpenId, value);
+        }
+
+        System.out.println("更新/写入完成: " + dayRankKey + " -> " + secOpenId);
+    }
+    public String getMonthRankTopN(int topN) throws Exception {
+        // 1. 生成表名
+        LocalDate today = LocalDate.now();
+        String tableName = "month_rank:" + today.format(DateTimeFormatter.ofPattern("yyyyMM")) + "01";
+
+        // 2. 查询表数据
+        Map<Object, Object> entries = stringRedisTemplate.opsForHash().entries(tableName);
+
+        // 3. 解析JSON成对象
+        List<Audience> players = new ArrayList<>();
+        for (Object value : entries.values()) {
+            String json = value.toString();
+            Audience audience = objectMapper.readValue(json, Audience.class);
+            players.add(audience);
+        }
+
+        // 4. 排序 + 截取前N
+        List<Audience> topPlayers = players.stream()
+                .sorted(Comparator.comparingInt(Audience::getScore).reversed())
+                .limit(topN)
+                .collect(Collectors.toList());
+
+        // 5. 转JSON字符串返回
+        return objectMapper.writeValueAsString(topPlayers);
+    }
+    public String getMonthlyRank(int topN) {
+        try {
+            // 1️⃣ 确定当前月的 Redis key，例如 2025-09 -> month_rank:20250901
+            Calendar cal = Calendar.getInstance();
+            String monthKey = String.format("month_rank:%tY%<tm01", cal.getTime());
+
+            // 2️⃣ 获取哈希里的所有数据
+            Map<Object, Object> entries = stringRedisTemplate.opsForHash().entries(monthKey);
+
+            // 3️⃣ 反序列化 JSON -> Map，并按 score 排序
+            List<Map<String, Object>> sortedList = entries.values().stream()
+                    .map(val -> {
+                        try {
+                            return objectMapper.readValue(
+                                    val.toString(),
+                                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}
+                            );
+                        } catch (Exception e) {
+                            return null;
+                        }
+                    })
+                    .filter(Objects::nonNull)
+                    .sorted((a, b) -> {
+                        int scoreA = ((Number) a.get("score")).intValue();
+                        int scoreB = ((Number) b.get("score")).intValue();
+                        return Integer.compare(scoreB, scoreA); // 降序
+                    })
+                    .limit(topN)
+                    .collect(Collectors.toList());
+
+            // 4️⃣ 转换成 JSON 字符串返回
+            return objectMapper.writeValueAsString(sortedList);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "{\"error\":\"failed to query rank\"}";
+        }
+
+    }
+    public String getWeeklyRank(int day,int topN) {
+        try {
+
+
+            // 1. 获取今天日期
+            LocalDate today = LocalDate.now();
+
+            // 2. 找到最近的目标星期几
+            LocalDate startDate = today;
+            while (startDate.getDayOfWeek().getValue() != day) {
+                startDate = startDate.minusDays(1);
+            }
+            LocalDate date = startDate;
+            //Calendar cal = Calendar.getInstance();
+           // cal.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY); // 跳到本周一
+           // cal.add(Calendar.DAY_OF_WEEK, day - 1);         // 偏移到目标 day
+            String weekKey = "week_rank:" + startDate.format(DateTimeFormatter.BASIC_ISO_DATE);
+
+            System.out.println(weekKey); // 打印运行时类
+            // 1️⃣ 确定当前月的 Redis key，例如 2025-09 -> month_rank:20250901
+
+            // 2️⃣ 获取哈希里的所有数据
+            Map<Object, Object> entries = stringRedisTemplate.opsForHash().entries(weekKey);
+
+            // 3️⃣ 反序列化 JSON -> Map，并按 score 排序
+            List<Map<String, Object>> sortedList = entries.values().stream()
+                    .map(val -> {
+                        try {
+                            return objectMapper.readValue(
+                                    val.toString(),
+                                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}
+                            );
+                        } catch (Exception e) {
+                            return null;
+                        }
+                    })
+                    .filter(Objects::nonNull)
+                    .sorted((a, b) -> {
+                        int scoreA = ((Number) a.get("score")).intValue();
+                        int scoreB = ((Number) b.get("score")).intValue();
+                        return Integer.compare(scoreB, scoreA); // 降序
+                    })
+                    .limit(topN)
+                    .collect(Collectors.toList());
+
+            // 4️⃣ 转换成 JSON 字符串返回
+            return objectMapper.writeValueAsString(sortedList);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "{\"error\":\"failed to query rank\"}";
+        }
+
+    }
+
+
+
+    public static class Audience {
+        private String sec_openid;
+        private String avatar_url;
+        private String nickname;
+        private int score;
+        private int kill_num;
+        private int win_num;
+
+        public String getSec_openid() { return sec_openid; }
+        public void setSec_openid(String sec_openid) { this.sec_openid = sec_openid; }
+        public String getAvatar_url() { return avatar_url; }
+        public void setAvatar_url(String avatar_url) { this.avatar_url = avatar_url; }
+        public String getNickname() { return nickname; }
+        public void setNickname(String nickname) { this.nickname = nickname; }
+        public int getScore() { return score; }
+        public void setScore(int score) { this.score = score; }
+        public int getKill_num() { return kill_num; }
+        public void setKill_num(int kill_num) { this.kill_num = kill_num; }
+        public int getWin_num() { return win_num; }
+        public void setWin_num(int win_num) { this.win_num = win_num; }
+    }
+
+
+    // 将任意密码转成 32 字节 Key (SHA-256)
+    private static byte[] getAesKey(String password) throws Exception {
+        MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+        return sha256.digest(password.getBytes(StandardCharsets.UTF_8));
+    }
+    // AES-CBC解密（Unity -> Java）
+    public static String decrypt(String cipherTextBase64, String password) {
+        try {
+            byte[] fullCipher = Base64.getDecoder().decode(cipherTextBase64);
+            byte[] key = getAesKey(password);
+
+            // 前16字节是 IV
+            byte[] iv = new byte[16];
+            byte[] cipherBytes = new byte[fullCipher.length - 16];
+            System.arraycopy(fullCipher, 0, iv, 0, 16);
+            System.arraycopy(fullCipher, 16, cipherBytes, 0, cipherBytes.length);
+
+            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            SecretKeySpec secretKey = new SecretKeySpec(key, "AES");
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, new IvParameterSpec(iv));
+
+            byte[] plainBytes = cipher.doFinal(cipherBytes);
+            return new String(plainBytes, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            // 解密失败返回 error
+            return "error";
+        }
+    }
+    // AES-CBC加密（Java -> Unity）
+    public static String encrypt(String plainText, String password) throws Exception {
+        byte[] key = getAesKey(password);
+
+        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        SecretKeySpec secretKey = new SecretKeySpec(key, "AES");
+
+        // 随机 IV
+        byte[] iv = new byte[16];
+        new SecureRandom().nextBytes(iv);
+
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey, new IvParameterSpec(iv));
+
+        byte[] plainBytes = plainText.getBytes(StandardCharsets.UTF_8);
+        byte[] cipherBytes = cipher.doFinal(plainBytes);
+
+        // 输出 = IV + CipherText
+        byte[] result = new byte[iv.length + cipherBytes.length];
+        System.arraycopy(iv, 0, result, 0, iv.length);
+        System.arraycopy(cipherBytes, 0, result, iv.length, cipherBytes.length);
+
+        return Base64.getEncoder().encodeToString(result);
+    }
+    //ZRANGE secKey 0 -1 WITHSCORES
+    public String validateSecKey( String secKey,  String password) {
+        String plainText;
+        try {
+            // 1️⃣ AES 解密
+            plainText = decrypt(secKey, password);
+        } catch (Exception e) {
+            return "error: decryption failed";
+        }
+
+        // 2️⃣ 明文长度检查
+        if (plainText.length() != 18) {
+            return "error: invalid length";
+        }
+
+        // 3️⃣ 前缀检查
+        if (!plainText.startsWith("cutearmy-")) {
+            return "error: invalid prefix";
+        }
+
+
+
+
+        String redisKey = "secKey"; // Redis key（表名）
+        long now = System.currentTimeMillis();
+        long expireAt = now + TimeUnit.HOURS.toMillis(2400);
+
+        // 1️⃣ 移除已过期元素
+        stringRedisTemplate.opsForZSet().removeRangeByScore(redisKey, 0, now);
+
+        // 2️⃣ 检查元素是否存在
+        Double score = stringRedisTemplate.opsForZSet().score(redisKey, plainText);
+        if (score != null) {
+            return "error: duplicate";
+        }
+
+        // 3️⃣ 添加元素，score = 过期时间戳
+        stringRedisTemplate.opsForZSet().add(redisKey, plainText, expireAt);
+
+        return "success";
+
+
+    }
+
+
+
+
     @PostMapping(path = "/live_data_callback")
     public JsonResponse liveDataCallbackExample(
             @RequestHeader("X-Anchor-OpenID") String anchorOpenID,
@@ -137,7 +809,12 @@ public class LivePlayDemoController {
         List<LiveDataModel> liveDataModelList = JSON.parseArray(body, LiveDataModel.class);
         liveDataModelList.forEach(liveDataModel ->
                 pushDataToClientByDouyinCloudWebsocket(anchorOpenID, liveDataModel.getMsgID(), msgType, body)
+
         );
+
+        liveWebSocketHandler.sendMessage(anchorOpenID, body);
+        log.info("body: {},callbackanchorOpenID: {}", body,anchorOpenID);
+
         JsonResponse response = new JsonResponse();
         response.success("success");
         return response;

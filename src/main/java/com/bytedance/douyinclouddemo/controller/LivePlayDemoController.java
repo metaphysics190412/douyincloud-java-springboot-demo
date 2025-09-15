@@ -319,8 +319,9 @@ public class LivePlayDemoController {
         // 4. 保存新的玩家数据
         for (GameRequest.Audience audience : request.getAudiences()) {
             String value = objectMapper.writeValueAsString(audience); // audience 转 JSON
-
-            if (IsFinish == "true" ){
+            
+           // if (IsFinish == "true" ){
+            if ("true".equals(IsFinish) ){
                 System.out.println(IsFinish);
                 log.info("enter into saveDayRank, IsFinish = {}", IsFinish);
                 saveOrUpdateDayRank(value);
@@ -330,7 +331,7 @@ public class LivePlayDemoController {
             }
         }
 
-        if (IsFinish == "true" ){
+        if ("true".equals(IsFinish)){
         
             log.info("enter into saveWeekRank and MonthRank, IsFinish = {}", IsFinish);
             generateWeekRank(1);

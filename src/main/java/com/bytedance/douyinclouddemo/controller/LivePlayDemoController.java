@@ -322,7 +322,7 @@ public class LivePlayDemoController {
 
             if (IsFinish == "true" ){
                 System.out.println(IsFinish);
-                log.info("enter into saveDayRank");
+                log.info("enter into saveDayRank, IsFinish = {}", IsFinish);
                 saveOrUpdateDayRank(value);
             }else{
                 log.info("enter into saveSetRank");

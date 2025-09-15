@@ -325,13 +325,14 @@ public class LivePlayDemoController {
                 log.info("enter into saveDayRank, IsFinish = {}", IsFinish);
                 saveOrUpdateDayRank(value);
             }else{
-                log.info("enter into saveSetRank");
+                log.info("enter into saveSetRank, IsFinish = {}", IsFinish);
                 stringRedisTemplate.opsForHash().put(playerKey, audience.getSec_openid(), value);
             }
         }
 
         if (IsFinish == "true" ){
-            log.info("enter into saveWeekRank and MonthRank");
+        
+            log.info("enter into saveWeekRank and MonthRank, IsFinish = {}", IsFinish);
             generateWeekRank(1);
             generateMonthRank();
         }

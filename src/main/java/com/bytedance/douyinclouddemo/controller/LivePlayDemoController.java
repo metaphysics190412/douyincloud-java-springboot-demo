@@ -108,7 +108,7 @@ public class LivePlayDemoController {
                 .getJSONObject("info")
                 .getString("room_id");
 
-        roomID ="123456789123456789";
+        
         log.info("roomID: {}", roomID);
 
 
